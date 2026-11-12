@@ -14,3 +14,9 @@ __pycache__/
 *.pyc
 .venv/
 .ipynb_checkpoints/
+
+# Excepción: tablas de configuración (tarifas) sí van al repo
+!config/
+!config/*.csv
+!docs/
+!docs/*.xlsx

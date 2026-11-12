@@ -52,7 +52,7 @@ def perfil_medidores() -> pd.DataFrame:
     if salud is not None:
         if "relevante_agua" in salud:  # solo hospitales, clínicas con internamiento y hemodiálisis
             salud = salud[salud["relevante_agua"].astype(str).str.lower() == "true"]
-        med = med.join(vecino_mas_cercano(med, salud, ["categoria", "clasificacion"], "salud", RADIO_PERFIL_M))
+        med = med.join(vecino_mas_cercano(med, salud, ["categoria", "clasificacion", "institucion"], "salud", RADIO_PERFIL_M))
 
     osm = cargar("osm_lima.csv")
     if osm is not None:
@@ -85,7 +85,7 @@ def base_diaria(perfil: pd.DataFrame) -> pd.DataFrame:
         base = base.merge(clima.drop(columns="fuente"), on="fecha", how="left")
 
     cols = [c for c in ["medidor", "distrito", "ubigeo", "perfil_probable", "criticidad",
-                        "colegio_niveles", "colegio_turnos", "salud_categoria", "osm_lugares_200m"] if c in perfil]
+                        "colegio_niveles", "colegio_turnos", "colegio_gestion", "salud_categoria", "salud_institucion", "osm_lugares_200m"] if c in perfil]
     base = base.merge(perfil[cols], on="medidor", how="left")
     base["sin_coordenadas"] = base["perfil_probable"].isna()
     base.to_csv(PROC / "base_diaria.csv", index=False)
