@@ -4,3 +4,7 @@ openpyxl
 python-dotenv
 scikit-learn
 pyarrow
+holidays
+requests
+shapely
+dbfread
