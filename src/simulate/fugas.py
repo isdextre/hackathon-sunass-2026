@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.config import CORTE_ENTRENAMIENTO
 from src.features.calendario import agregar_calendario
 from src.features.consumo_diario import consumo_diario
 from src.features.limpieza import limpiar_lecturas
@@ -27,7 +28,7 @@ from src.model.bandas import entrenar
 from src.model.detectar import VENTANA, cargar, diagnosticar
 
 PROC = Path(__file__).resolve().parents[2] / "data" / "processed"
-CORTE = pd.Timestamp("2026-09-30")              # fin del entrenamiento
+CORTE = pd.Timestamp(CORTE_ENTRENAMIENTO)       # fin del entrenamiento
 INICIO_FUGA = ("2026-10-06", "2026-10-18")       # la fuga empieza en algún momento de este rango
 FUGAS_M3H = [0.05, 0.1, 0.25, 0.5, 1.0]          # caudal de fuga en m³/hora (1.2 a 24 m³/día)
 SEMILLA = 7

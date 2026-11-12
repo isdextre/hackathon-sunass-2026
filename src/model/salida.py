@@ -13,10 +13,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.config import CORTE_ENTRENAMIENTO
 from src.model.soles import grupo_de, importe_vec
 
 PROC = Path(__file__).resolve().parents[2] / "data" / "processed"
-CORTE = pd.Timestamp("2026-09-30")  # fin del entrenamiento usado en detectar
+CORTE = pd.Timestamp(CORTE_ENTRENAMIENTO)
 
 
 def tabla_diaria() -> pd.DataFrame:
@@ -78,11 +79,11 @@ def mensaje(r: pd.Series) -> str:
     if r.tipo_alerta == "fuga_continua":
         return (f"Posible fuga: de madrugada (0 a 5 am) tu medidor marca {r.consumo_noche_m3:.1f} m³, cuando lo "
                 f"normal para ti es {r.noche_normal_m3:.1f} m³, y lleva {r.dias_en_alerta} días así. Si sigue, "
-                f"pagarías unos S/ {r.soles_riesgo_mes:,.0f} más este mes. ¿Puedes cerrar todas las llaves "
+                f"te costaría unos S/ {r.soles_riesgo_mes:,.0f} más al mes. ¿Puedes cerrar todas las llaves "
                 f"y revisar si el medidor sigue girando? " + hoy)
     if r.tipo_alerta == "consumo_atipico":
         return (f"Tu consumo de los últimos días está por encima de lo normal para ti (normal: "
-                f"{r.banda_p50_m3:.1f} m³/día). Eso suma unos S/ {r.soles_riesgo_mes:,.0f} este mes. "
+                f"{r.banda_p50_m3:.1f} m³/día). Si sigue así, son unos S/ {r.soles_riesgo_mes:,.0f} más al mes. "
                 f"¿Hubo algún cambio en tu operación? " + hoy)
     if r.tipo_alerta == "medidor_detenido":
         return (f"Tu medidor no registra consumo hace {r.dias_en_alerta} días, aunque normalmente consumes "
@@ -100,6 +101,8 @@ def tabla_medidor(diaria: pd.DataFrame) -> pd.DataFrame:
                        "exceso_m3_dia", "exceso_m3_30d", "soles_riesgo_mes", "prioridad"]]
                    .rename(columns={"tipo_alerta": "tipo_alerta_ultima"}), on="medidor", how="left"))
     m["alerta_vigente"] = m["vigente"].fillna(False).astype(bool)
+    # Medidores que dejaron de transmitir: su último dato es anterior al último día de la base
+    m["dias_sin_datos"] = (pd.to_datetime(diaria["fecha"]).max() - pd.to_datetime(m["ultima_fecha"])).dt.days
     m["tipo_alerta"] = m["tipo_alerta_ultima"].where(m["alerta_vigente"])
     for c in ("exceso_m3_dia", "exceso_m3_30d", "soles_riesgo_mes", "prioridad"):
         m[c] = m[c].where(m["alerta_vigente"], 0.0)
@@ -109,7 +112,7 @@ def tabla_medidor(diaria: pd.DataFrame) -> pd.DataFrame:
     m["ranking_prioridad"] = m["prioridad"].rank(ascending=False, method="first").where(m["alerta_vigente"])
     m["mensaje_sugerido"] = m.apply(mensaje, axis=1)
     cols = ["medidor", "distrito", "lat", "lon", "perfil_probable", "categoria", "grupo", "criticidad",
-            "ultima_fecha", "consumo_m3", "banda_p50_m3", "limite_alerta_m3", "consumo_noche_m3",
+            "ultima_fecha", "dias_sin_datos", "consumo_m3", "banda_p50_m3", "limite_alerta_m3", "consumo_noche_m3",
             "noche_normal_m3", "consumo_mes_acum_m3", "soles_mes_acum", "recibo_proyectado_soles",
             "alerta_vigente", "tipo_alerta", "primera_alerta", "dias_en_alerta", "exceso_m3_dia",
             "soles_riesgo_mes", "prioridad", "ranking_prioridad", "destinatario", "mensaje_sugerido"]

@@ -6,7 +6,7 @@ Uso: python -m src.model.detectar [fin_entrenamiento]   (por defecto 2026-09-30)
 Tipos de alerta (de más grave a menos):
   fuga_continua     la madrugada (0-5 am) consume más que su historial casi todas las noches
                     de la última semana: patrón típico de fuga después del medidor
-  medidor_detenido  7 días seguidos en cero en un medidor que normalmente consume
+  medidor_detenido  7 días seguidos en cero cuando en una semana normal consumiría ≥ 5 m³
   consumo_atipico   3 días seguidos por encima de su banda, o 1 día al triple del límite
 
 No hay alerta por "consumo plano" (madrugada al ritmo del día): en estos datos el 22 % de
@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.config import CORTE_ENTRENAMIENTO
 from src.model.bandas import entrenar
 
 PROC = Path(__file__).resolve().parents[2] / "data" / "processed"
@@ -62,16 +63,20 @@ def diagnosticar(df: pd.DataFrame, bandas: pd.DataFrame) -> pd.DataFrame:
     d["noches_altas_7d"] = _rolling(d, "noche_alta", VENTANA, "sum", 5)
     d["ratio_noche_7d"] = _rolling(d, "ratio_noche_dia", VENTANA, "median", 5)
     d["consumo_7d"] = _rolling(d, "consumo_m3", VENTANA, "mean", 5)
+    # Consumo normal de una semana típica: promedia la banda de cada tipo de día de la ventana
+    # (5 laborables + sábado + domingo), así el exceso no depende de qué día cae el último.
+    d["p50_7d"] = _rolling(d, "p50", VENTANA, "mean", 1)
+    d["p50_semana_m3"] = _rolling(d, "p50", VENTANA, "sum", VENTANA)
     d["es_cero"] = (d["consumo_m3"] == 0).astype(float)
     d["ceros_7d"] = _rolling(d, "es_cero", VENTANA, "sum", VENTANA)
     d["sobre_int"] = d["sobre_banda"].astype(float)
     d["sobre_3d"] = _rolling(d, "sobre_int", 3, "sum", 3)
     d["operacion_24h"] = d["ratio_noche_hist"] >= 0.8
 
-    p50_max = d.groupby("medidor")["p50"].transform("max")
     reglas = {
         "fuga_continua": d["noches_altas_7d"] >= 6,
-        "medidor_detenido": (d["ceros_7d"] >= VENTANA) & (p50_max >= 1),
+        # 7 días en cero cuando en una semana normal consumiría al menos 5 m³
+        "medidor_detenido": (d["ceros_7d"] >= VENTANA) & (d["p50_semana_m3"] >= 5),
         "consumo_atipico": (d["sobre_3d"] >= 3) | d["muy_sobre_banda"],
     }
     d["tipo_alerta"] = pd.Series(pd.NA, index=d.index, dtype="object")
@@ -91,10 +96,10 @@ def resumen_alertas(d: pd.DataFrame) -> pd.DataFrame:
     #                   la madrugada consume de más (medido en 5 h)
     #   medidor detenido: lo que normalmente consume y ahora no se registra ni se factura
     exceso_noche = (ultima["consumo_noche_m3"] - ultima["noche_p50"].fillna(0)).clip(lower=0)
-    exceso_dia = (ultima["consumo_7d"] - ultima["p50"]).clip(lower=0)
+    exceso_dia = (ultima["consumo_7d"] - ultima["p50_7d"]).clip(lower=0)
     tipo = ultima["tipo_alerta"]
     exceso = np.select([tipo.eq("fuga_continua"), tipo.eq("medidor_detenido")],
-                       [np.maximum(exceso_dia, exceso_noche), ultima["p50"]], exceso_dia)
+                       [np.maximum(exceso_dia, exceso_noche), ultima["p50_7d"]], exceso_dia)
     ultima = ultima.assign(exceso_m3_dia=np.round(exceso, 2))
     out = ultima.merge(agg, on="medidor")
     # Vigente: la alerta sigue activa en el último día con datos de ese medidor
@@ -103,13 +108,13 @@ def resumen_alertas(d: pd.DataFrame) -> pd.DataFrame:
     out["exceso_m3_30d"] = (out["exceso_m3_dia"] * 30).round(1)
     out["prioridad"] = (out["tipo_alerta"].map(PRIORIDAD_TIPO) * out["criticidad"]
                         * np.log1p(out["exceso_m3_30d"])).round(2)
-    cols = ["medidor", "tipo_alerta", "vigente", "fecha", "primera_alerta", "dias_en_alerta", "consumo_m3", "p50", "limite_sup",
+    cols = ["medidor", "tipo_alerta", "vigente", "fecha", "primera_alerta", "dias_en_alerta", "consumo_m3", "p50", "p50_7d", "limite_sup",
             "consumo_noche_m3", "noche_p50", "ratio_noche_7d", "exceso_m3_dia", "exceso_m3_30d",
             "perfil_probable", "operacion_24h", "criticidad", "distrito", "prioridad"]
     return out[cols].rename(columns={"fecha": "ultima_alerta"}).sort_values(["vigente", "prioridad"], ascending=False)
 
 
-def main(fin_entrenamiento: str = "2026-09-30") -> None:
+def main(fin_entrenamiento: str = CORTE_ENTRENAMIENTO) -> None:
     df = cargar()
     corte = pd.Timestamp(fin_entrenamiento)
     entreno = df[df["fecha"] <= corte]

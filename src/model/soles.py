@@ -139,7 +139,7 @@ def soles_alertas(perfil: pd.DataFrame, periodo: str) -> pd.DataFrame:
     p = perfil.set_index("medidor")
     al["categoria"] = al["medidor"].map(p["categoria"])
     al["grupo"] = al["distrito"].map(grupo_de)
-    base_mes = (al["p50"] * 30).fillna(0)
+    base_mes = (al["p50_7d"] * 30).fillna(0)  # consumo normal de un mes típico
     al["soles_riesgo_mes"] = [costo_extra(b, e, c, periodo, g) for b, e, c, g in
                               zip(base_mes, al["exceso_m3_30d"].fillna(0), al["categoria"], al["grupo"])]
     # Prioridad: gravedad del tipo x criticidad del cliente x soles en riesgo (escala log)

@@ -26,6 +26,7 @@ MEDIDOR = {
  "grupo": ("entero", "", "Grupo tarifario: 2 para Punta Negra, Punta Hermosa, San Bartolo y Santa María del Mar; 1 para el resto.", "interno"),
  "criticidad": ("entero", "1 a 3", "Importancia social del cliente: 3 salud y colegios; 2 gobierno, hoteles, mercados; 1 resto.", "dashboard"),
  "ultima_fecha": ("fecha", "", "Último día con consumo calculado para ese medidor.", "ambos"),
+ "dias_sin_datos": ("entero", "días", "Días entre el último dato del medidor y el último día de la base. Mayor a 1 = el medidor dejó de transmitir (revisar telemetría).", "dashboard"),
  "consumo_m3": ("número", "m³", "Consumo del último día.", "ambos"),
  "banda_p50_m3": ("número", "m³/día", "Consumo normal (mediana) para ese tipo de día, según su propio historial.", "ambos"),
  "limite_alerta_m3": ("número", "m³/día", "Consumo por encima del cual el día se considera fuera de banda.", "dashboard"),
@@ -38,8 +39,8 @@ MEDIDOR = {
  "tipo_alerta": ("texto", "", "fuga_continua, medidor_detenido o consumo_atipico (ver hoja 'Que predice el modelo'). Vacío si no hay alerta vigente.", "ambos"),
  "primera_alerta": ("fecha", "", "Primer día con alerta en el periodo evaluado.", "dashboard"),
  "dias_en_alerta": ("entero", "días", "Días con alerta en el periodo evaluado.", "ambos"),
- "exceso_m3_dia": ("número", "m³/día", "Consumo por encima de lo normal (o, si el medidor está detenido, lo que deja de registrar).", "ambos"),
- "soles_riesgo_mes": ("número", "S/ con IGV", "Cuánto más se pagaría (o dejaría de facturarse) en un mes si el problema sigue.", "ambos"),
+ "exceso_m3_dia": ("número", "m³/día", "Promedio de los últimos 7 días por encima de su semana normal (en fugas, al menos el exceso de madrugada; si el medidor está detenido, lo que deja de registrar).", "ambos"),
+ "soles_riesgo_mes": ("número", "S/ con IGV", "Cuánto más se pagaría (o dejaría de facturarse) por cada mes que el problema siga.", "ambos"),
  "prioridad": ("número", "", "Puntaje para ordenar la atención: peso del tipo de alerta × criticidad × log(1 + soles en riesgo).", "dashboard"),
  "ranking_prioridad": ("entero", "", "Puesto en la lista de atención (1 = más urgente). Vacío si no hay alerta.", "dashboard"),
  "destinatario": ("texto", "", "A quién va el aviso: cliente, o cliente_y_sedapal cuando hay alerta (Sedapal ve el caso en el panel).", "agente"),
@@ -118,6 +119,17 @@ def main():
     assert set(med.columns) == set(MEDIDOR), set(med.columns) ^ set(MEDIDOR)
     assert set(dia.columns) == set(DIARIA), set(dia.columns) ^ set(DIARIA)
     sim = pd.read_csv(PROC / "simulacion_resumen.csv")
+    casos = pd.read_csv(PROC / "simulacion_casos.csv")
+    det = casos[casos["escenario"] == "detenido"]
+    det_ok = det[det["consumo_p50_m3d"] >= 1]["detectado"].mean()
+    bajo = (det["consumo_p50_m3d"] < 1).mean()
+    fu = casos[casos["escenario"] == "fuga"].copy()
+    fu["rel"] = pd.cut(fu["fuga_vs_consumo"], [0, 0.25, 0.5, 1, float("inf")])
+    rel = fu.groupby("rel", observed=True)["detectado"].mean().tolist()
+    val = pd.read_csv(PROC / "validacion_tarifa_ds01.csv")
+    n_ok, n_val = int(val["cuadra"].sum()), len(val)
+    al = pd.read_csv(PROC / "alertas.csv")
+    n_eval = pd.read_csv(PROC / "diagnostico_diario.csv", usecols=["medidor"])["medidor"].nunique()
 
     wb = Workbook()
     ws = wb.active
@@ -130,7 +142,7 @@ def main():
         ("Llave", "medidor (código ID MEDIDOR de BD_ESCE). Une las dos tablas."),
         ("Cómo se generan", "python -m src.model.detectar, luego python -m src.model.soles y python -m src.model.salida (orden completo en el README)."),
         ("Periodo", f"Datos de {dia['fecha'].min()} a {dia['fecha'].max()}. Banda aprendida hasta 2026-09-30; octubre es el periodo diagnosticado."),
-        ("Soles", "Con la estructura tarifaria de Sedapal (config/tarifas_*.csv), validada contra los importes reales de DS01 (379 de 380 meses cuadran). Incluye IGV 18 %."),
+        ("Soles", f"Con la estructura tarifaria de Sedapal (config/tarifas_*.csv), validada contra los importes reales de DS01 ({n_ok} de {n_val} meses cuadran). Incluye IGV 18 %."),
         ("Supuesto 1", "La categoría tarifaria de los medidores de telemetría no viene en los datos: colegio o salud públicos = estatal; el resto = comercial."),
         ("Supuesto 2", "El perfil (colegio, salud) se infiere por cercanía a establecimientos de ESCALE y RENIPRESS (60 m). No guarda nombres para no reidentificar al cliente (Ley 29733)."),
         ("Hojas", "salida_medidor y salida_diaria: columna por columna. 'Que predice el modelo': qué calcula, cómo, y qué tan bien funciona."),
@@ -157,7 +169,7 @@ def main():
         ("Recibo proyectado", "Cuánto pagará al cierre del mes.",
          "Acumulado del mes + promedio de los últimos 7 días × días que faltan, pasado por la tarifa.", "recibo_proyectado_soles"),
         ("Soles en riesgo", "Cuánto cuesta el problema al mes si sigue.",
-         "Diferencia de recibo entre (consumo normal + exceso) y consumo normal, con tramos e IGV.", "soles_riesgo_mes"),
+         "Diferencia de recibo entre (consumo normal de un mes + exceso de 30 días) y consumo normal, con tramos e IGV. Consumo normal = promedio de su banda en una semana típica.", "soles_riesgo_mes"),
         ("Prioridad", "Qué casos atender primero en Sedapal.",
          "Peso del tipo (fuga 3, detenido 2, atípico 1) × criticidad (1 a 3) × log(1 + soles en riesgo).", "prioridad, ranking_prioridad"),
     ]
@@ -167,7 +179,7 @@ def main():
     reglas = [
         ("fuga_continua", "La madrugada (0-5 am) supera su propio P90 + 0.5 m³ en 6 de las últimas 7 noches.",
          "Fuga interna después del medidor (cisterna, inodoro, tubería).", "Cliente: prueba de cerrar llaves. Sedapal: seguimiento."),
-        ("medidor_detenido", "7 días seguidos en 0 m³ en un medidor que normalmente consume ≥ 1 m³/día.",
+        ("medidor_detenido", "7 días seguidos en 0 m³ cuando, según su banda, en una semana normal consumiría ≥ 5 m³.",
          "Medidor parado o manipulado: agua que no se factura (o local cerrado).", "Sedapal: inspección. Cliente: confirmar si estuvo cerrado."),
         ("consumo_atipico", "3 días seguidos sobre su límite, o 1 día por encima del triple del límite.",
          "Cambio de uso o fuga que empieza. Suele ser la primera señal de una fuga.", "Cliente: triaje por WhatsApp."),
@@ -181,15 +193,15 @@ def main():
     for _, r in sim.iterrows():
         if r["escenario"] == "control":
             continue
-        nombre = f"Fuga {r['fuga_m3h']:g} m³/h ({r['fuga_m3_dia']:g} m³/día)" if r["escenario"] == "fuga" else "Medidor detenido (99 % si consume ≥ 1 m³/día)"
+        nombre = f"Fuga {r['fuga_m3h']:g} m³/h ({r['fuga_m3_dia']:g} m³/día)" if r["escenario"] == "fuga" else f"Medidor detenido ({det_ok:.0%} si consume ≥ 1 m³/día)"
         filas.append((nombre, f"{r['detectado']:.0%}", f"{r['dias_mediana']:g}", f"{r['dias_p90']:g}"))
     f = tabla(ws, f + 1, ["Escenario", "Detectado", "Días hasta la alerta (mediana)", "Días (p90)"], filas, [28, 48, 62, 36])
 
     estilo_titulo(ws, f, "Límites que hay que declarar", 12)
     lim = [
-        ("Tamaño de la fuga", "Lo que manda es la fuga frente al consumo normal del cliente: si es menos del 25 % se detecta en 7 a 13 % de los casos; entre 25 y 50 %, en 31 %; entre 50 y 100 %, en 58 %; si es mayor que su consumo normal, en 88 %."),
-        ("Medidor detenido", "En el 99 % de los medidores que consumen ≥ 1 m³/día se detecta. Los que consumen menos (25 %) no se pueden evaluar."),
-        ("Falsas alarmas", "No hay casos confirmados de fuga, así que no se puede medir la tasa de falsas alarmas. En octubre: 5 % de medidores con alerta vigente al cierre y 17 % con alguna alerta en el mes."),
+        ("Tamaño de la fuga", f"Lo que manda es la fuga frente al consumo normal del cliente: si es menos del 25 % se detecta en {rel[0]:.0%} de los casos; entre 25 y 50 %, en {rel[1]:.0%}; entre 50 y 100 %, en {rel[2]:.0%}; si es mayor que su consumo normal, en {rel[3]:.0%}."),
+        ("Medidor detenido", f"Se detecta en el {det_ok:.0%} de los medidores que consumen ≥ 1 m³/día. Los que consumen menos ({bajo:.0%}) casi no se pueden evaluar."),
+        ("Falsas alarmas", f"No hay casos confirmados de fuga, así que no se puede medir la tasa de falsas alarmas. En el periodo evaluado: {al['vigente'].sum() / n_eval:.0%} de medidores con alerta vigente al cierre y {len(al) / n_eval:.0%} con alguna alerta."),
         ("Historial", "La banda usa 2 meses. Con más meses (estacionalidad, verano) las bandas serán más estables y habrá menos alertas."),
         ("Resolución", "Lecturas cada ~3 h y en m³ enteros. No se presenta consumo hora por hora."),
         ("Datos simulados", "Las fugas de la simulación son artificiales; se rotulan como tales."),

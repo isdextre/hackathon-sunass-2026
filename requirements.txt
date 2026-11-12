@@ -8,3 +8,4 @@ holidays
 requests
 shapely
 dbfread
+google-cloud-bigquery
