@@ -1,0 +1,16 @@
+# Secretos
+.env
+*.pem
+*.json.key
+
+# Datos (no se suben al repo)
+01 GESTIÓN COMERCIAL INFORMACION/
+data/
+*.xlsx
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
